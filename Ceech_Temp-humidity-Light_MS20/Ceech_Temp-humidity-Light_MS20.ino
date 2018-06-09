@@ -1,47 +1,28 @@
-/**
- * The MySensors Arduino library handles the wireless radio link and protocol
- * between your home built sensors/actuators and HA controller of choice.
- * The sensors forms a self healing radio network with optional repeaters. Each
- * repeater and gateway builds a routing tables in EEPROM which keeps track of the
- * network topology allowing messages to be routed to nodes.
- *
- * Created by Henrik Ekblad <henrik.ekblad@mysensors.org>
- * Copyright (C) 2013-2015 Sensnology AB
- * Full contributor list: https://github.com/mysensors/Arduino/graphs/contributors
- *
- * Documentation: http://www.mysensors.org
- * Support Forum: http://forum.mysensors.org
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- *******************************
- *
- * REVISION HISTORY
- * Version 1.0 - Thomas Bowman Mørch
- * 
- * DESCRIPTION
- * Default sensor sketch for Sensebender Micro module
- * Act as a temperature / humidity sensor by default.
- *
- * If A0 is held low while powering on, it will enter testmode, which verifies all on-board peripherals
- *  
- * Battery voltage is as battery percentage (Internal message), and optionally as a sensor value (See defines below)
- *
- *
- * Version 1.3 - Thomas Bowman Mørch
- * Improved transmission logic, eliminating spurious transmissions (when temperatuere / humidity fluctuates 1 up and down between measurements)
- * Added OTA boot mode, need to hold A1 low while applying power. (uses slightly more power as it's waiting for bootloader messages)
- * 
- * Version 1.4 - Thomas Bowman Mørch
- * 
- * Corrected division in the code deciding whether to transmit or not, that resulted in generating an integer. Now it's generating floats as expected.
- * Simplified detection for OTA bootloader, now detecting if MY_OTA_FIRMWARE_FEATURE is defined. If this is defined sensebender automaticly waits 300mS after each transmission
- * Moved Battery status messages, so they are transmitted together with normal sensor updates (but only every 60th minute)
- * 
- */
+/*
+ PROJECT: MySensors / LiON charger board 
+ PROGRAMMER: AWI
+ DATE: 28 april 2015/ last update: 11 may 2015 / BH1750 added: 5 September 2015
+ FILE: MS_Solar_2.ino
+ LICENSE: Public domain
 
+ Hardware: Ceech - ATmega328p board w/ ESP8266 and NRF24l01+ socket LTC4067 lithium battery charger
+  and MySensors 1.4
+
+  Temp & Humidity - HTU21
+  Barometer & Temp - BMP085
+  Light sensor - BH1750
+  On board EEPROM (I2C)
+  On board Li-On charger with multiple V/A measurements
+  
+Special:
+  program with Arduino Pro 3.3V 8Mhz
+  
+SUMMARY:
+  Reads on-board sensors and send to gateway /controller
+ Remarks:
+  On board EEPROM and MOSFET not used in this sketch
+  Fixed node-id
+*/
 #define DEBUG            0
 
 // Enable MySensors Lib debug prints
@@ -51,8 +32,11 @@
 #define MY_RADIO_NRF24
 //#define MY_RADIO_RFM69
 
+#define MY_RF24_CE_PIN    7
+#define MY_RF24_CS_PIN    8
+
 // Define a static node address, remove if you want auto address assignment
-#define MY_NODE_ID      1
+#define MY_NODE_ID      5
 
 /*
 Node ID   | Node place        |
@@ -65,44 +49,26 @@ Node ID   | Node place        |
 6         | Balcony           | +
 */
 
-#define MY_OTA_FIRMWARE_FEATURE 1
-
-// For Winbond W25X40
-#define MY_OTA_FLASH_JDECID 0xEF30
-
-#include <MySensors.h>
-#include <Wire.h>
+#include <SPI.h>
+#include <MySensor.h>
+#include <Wire.h>         // I2C
 #include "TSL2561.h"
-#include <Adafruit_Sensor.h>
 #include "HTU21D.h"
 
-#include <SPI.h>
-#ifndef MY_OTA_FIRMWARE_FEATURE
-#include "drivers/SPIFlash/SPIFlash.cpp"
-#endif
-#include <EEPROM.h>  
-#include <sha204_lib_return_codes.h>
-#include <sha204_library.h>
-//#include <avr/power.h>
-
-// Uncomment the line below, to transmit battery voltage as a normal sensor value
-//#define BATT_SENSOR    199
-
-#define SKETCH_NAME "APMM Temp+Hum+Light"
+#define SKETCH_NAME "CEECH Temp+Humidity"
 #define SKETCH_VERSION "1.0"
 
 // Child sensor ID's
 #define CHILD_ID_TEMP       1
 #define CHILD_ID_HUM        2
-#define CHILD_ID_BARO       3
-#define CHILD_ID_LIGHT      4
+#define CHILD_ID_LIGHT      3
+#define CHILD_ID_BATT       4
+#define CHILD_ID_SOLAR      5
 
 // How many milli seconds between each measurement
 #define MEASURE_INTERVAL ( 5 * 60000 ) // 5 minut
 
 #define BATTERY_SEND_INTERVAL (60)    //(1)
-// How many milli seconds should we wait for OTA?
-#define OTA_WAIT_PERIOD 300
 
 // FORCE_TRANSMIT_INTERVAL, this number of times of wakeup, the sensor is forced to report all values to the controller
 #define FORCE_TRANSMIT_INTERVAL (6) // 6 * MEASURE_INTERVAL (5 minut) = 30 minut
@@ -120,9 +86,12 @@ Node ID   | Node place        |
 #define LED_PIN        13
 #define ATSHA204_PIN   17 // A3
 
-// this CONVERSION_FACTOR is used to convert from Pa to kPa in forecast algorithm
-// get kPa/h be dividing hPa by 10 
-#define CONVERSION_FACTOR (1.0/10.0)
+#define LTC4067_CHRG_PIN  A1    //analog input A1 on ATmega 328 is /CHRG signal from LTC4067
+#define batteryVoltage_PIN  A0    //analog input A0 on ATmega328 is battery voltage ( /2)
+#define solarVoltage_PIN  A2    //analog input A2 is solar cell voltage (/ 2)
+#define solarCurrent_PIN  A6    //analog input A6 is input current ( I=V/Rclprog x 1000 )
+#define batteryChargeCurrent_PIN  A7    //analog input A7 is battery charge current ( I=V/Rprog x 1000 )
+#define LTC4067_SUSPEND_PIN 9   //digital output D9 - drive it high to put LTC4067 in SUSPEND mode
 
 /************************************/
 /********* GLOBAL VARIABLES *********/
@@ -142,10 +111,8 @@ SPIFlash flash(8, 0xEF30); // (Cs, ID)
 MyMessage msgHum(CHILD_ID_HUM, V_HUM);
 MyMessage msgTemp(CHILD_ID_TEMP, V_TEMP);
 MyMessage msgLight(CHILD_ID_LIGHT, V_LIGHT_LEVEL);
-
-#ifdef BATT_SENSOR
-MyMessage msgBatt(BATT_SENSOR, V_VOLTAGE);
-#endif
+MyMessage msgBatt(CHILD_ID_BATT, V_VOLTAGE);
+MyMessage msgSolar(CHILD_ID_SOLAR, V_VOLTAGE);
 
 // Global settings
 int measureCount = 0;
@@ -159,26 +126,15 @@ boolean transmission_occured = false;
 float lastTemperature = -100;
 float lastHumidity = -100;
 long lastBattery = -100;
+long lastSolar = -100;
 uint16_t lastLux = 65535;
-
-const int LAST_SAMPLES_COUNT = 5;
-float lastPressureSamples[LAST_SAMPLES_COUNT];
-
-int minuteCount = 0;
-bool firstRound = true;
-// average value is used in forecast algorithm.
-float pressureAvg;
-// average after 2 hours is used as reference value for the next iteration.
-float pressureAvg2;
-
-float dP_dt;
 
 /****************************************************
  *
  * Setup code 
  *
  ****************************************************/
-void setup()
+void setup()  
 {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
@@ -191,12 +147,17 @@ void setup()
   Serial.flush();
 #endif
 
-#ifdef MY_SIGNING_ATSHA204
   // Make sure that ATSHA204 is not floating
   pinMode(ATSHA204_PIN, INPUT);
   digitalWrite(ATSHA204_PIN, HIGH);
   digitalWrite(LED_PIN, HIGH); 
-#endif
+
+  // use VCC (3.3V) reference
+  analogReference(DEFAULT);               // default external reference = 3.3v for Ceech board
+  VccReference = 3.323 ;                  // measured Vcc input (on board LDO)
+  pinMode(LTC4067_SUSPEND_PIN, OUTPUT);         // suspend of Lion charger set
+  digitalWrite(LTC4067_SUSPEND_PIN,LOW);            //  active (non suspend) at start
+
   humiditySensor.begin();
 
   // You can change the gain on the fly, to adapt to brighter/dimmer light situations
@@ -218,7 +179,8 @@ void setup()
   Serial.println("OTA FW update enabled");
 #endif
 #endif
-}
+
+ }
 
 void presentation()
 {
@@ -233,6 +195,7 @@ void presentation()
   present(BATT_SENSOR, S_POWER);
 #endif
 }
+
 
 /***********************************************
  *
@@ -336,6 +299,47 @@ void sendSensorMeasurements(bool force)
   }
 }
 
+
+void sendVoltage(void)
+// battery and charging values
+{
+  // get Battery Voltage & charge current
+  float batteryVoltage = ((float)analogRead(batteryVoltage_PIN)* VccReference/1024) * 2;  // actual voltage is double
+  Serial.print("Batt: ");
+  Serial.print(batteryVoltage);
+  Serial.print("V ; ");
+  float batteryChargeCurrent = ((float)analogRead(batteryChargeCurrent_PIN) * VccReference/1024)/ 2.5 * 1000; // current(mA) = V/Rprog(kohm)
+  Serial.print(batteryChargeCurrent);
+  Serial.println("mA ");
+
+  // get Solar Voltage & charge current
+  float solarVoltage = ((float)analogRead(solarVoltage_PIN)/1024 * VccReference) * 2 ;    // actual voltage is double
+  Serial.print("Solar: ");
+  Serial.print(solarVoltage);
+  Serial.print("V ; ");
+  // get Solar Current
+  float solarCurrent = ((float)analogRead(solarCurrent_PIN)/1024 * VccReference)/ 2.5 * 1000;   // current(mA) = V/Rclprog(kohm)
+  Serial.print(solarCurrent);
+  Serial.print(" mA; charge: ");
+  Serial.println(digitalRead(LTC4067_CHRG_PIN)?"No":"Yes");
+  // send battery percentage for node
+  int battPct = 1 ;
+  if (batteryVoltage > VccMin){
+    battPct = 100.0*(batteryVoltage - VccMin)/(VccMax - VccMin);
+  }
+  Serial.print("BattPct: ");
+  Serial.print(battPct);
+  Serial.println("% ");
+
+  gw.send(batteryVoltageMsg.set(batteryVoltage, 3));      // Send (V)
+  gw.send(batteryCurrentMsg.set(batteryChargeCurrent, 6));    // Send (mA)
+  gw.send(solarVoltageMsg.set(solarVoltage, 3));        // Send (V)
+  gw.send(solarCurrentMsg.set(solarCurrent, 6));        // Send (mA)
+  gw.sendBatteryLevel(battPct);
+  
+}
+
+
 /********************************************
  *
  * Sends battery information (battery percentage)
@@ -398,3 +402,24 @@ long readVcc() {
   return result; // Vcc in millivolts
  
 }
+
+/* Ceech board specifics for reference:
+It provides power for the circuit and charges the backup single-cell lithium battery while greatly extends battery life. You can monitor the voltages and currents. It has suspend mode, which reduces current consumption to around 40μA. The power source is a small, 5V solar cell. Connections:
+
+analog input A1 on ATmega 328 is /CHRG signal from LTC4067 (indicates fully charged)
+analog input A0 on ATmega328 is battery voltage
+analog input A2 is solar cell voltage
+analog input A6 is input current ( I=V/Rclprog x 1000 )
+analog input A7 is battery charge current ( I=V/Rprog x 1000 )
+digital output D9 - drive it high to put LTC4067 in SUSPEND mode
+All the voltages on analog inputs can be read with an analogRead() command in the Arduino IDE sketch. Those on inputs A0 an A2 represent direct values of the measured voltages divided by 2. The voltages on analog inputs A6 and A7 can be translated to currents. For example:
+
+Let us say that the voltage on A7 is 0.12V. And the trimmer pot on PROG pin is set to 2.5kOhm. This means that the current into the battery equals to 0.12V/2500ohm x 1000, which is 48mA.
+
+voltmeters on both battery and solar cell connections
+They are connected to analog inputs A0 and A2 on the ATmega328p. The voltage dividers resistors are equal, so the measured voltage is double the shown voltage.
+
+NRF24l01+ socket
+with CE and CSN pins connected to digital pins 7 and 8 ( you use RF24 radio(7, 8); in Arduino code). There is a 4.7uF capacitor connected across Vin and GND of the port
+*/
+

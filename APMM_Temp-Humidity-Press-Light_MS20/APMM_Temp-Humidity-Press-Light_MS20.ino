@@ -42,17 +42,17 @@
  * 
  */
 
-#define DEBUG            0
+//#define DEBUG            1
 
 // Enable MySensors Lib debug prints
-//#define MY_DEBUG          0
+//#define MY_DEBUG          1
 
 // Enable and select radio type attached
 #define MY_RADIO_NRF24
 //#define MY_RADIO_RFM69
 
 // Define a static node address, remove if you want auto address assignment
-#define MY_NODE_ID      2
+#define MY_NODE_ID      3
 
 /*
 Node ID   | Node place        |
@@ -181,9 +181,9 @@ MyMessage msgHum(CHILD_ID_HUM, V_HUM);
 MyMessage msgTemp(CHILD_ID_TEMP, V_TEMP);
 MyMessage msgBaro(CHILD_ID_BARO, V_PRESSURE);
 MyMessage msgFore(CHILD_ID_BARO, V_FORECAST);
-MyMessage msgLight(CHILD_ID_LIGHT, V_LIGHT_LEVEL);
 MyMessage msgSituation(CHILD_ID_BARO, V_VAR1);
 MyMessage msgFore2(CHILD_ID_BARO, V_VAR2);
+MyMessage msgLight(CHILD_ID_LIGHT, V_LIGHT_LEVEL);
 
 #ifdef BATT_SENSOR
 MyMessage msgBatt(BATT_SENSOR, V_VOLTAGE);
@@ -218,6 +218,7 @@ float pressureAvg2;
 
 float dP_dt;
 
+void displaySensorDetails(void);
 /****************************************************
  *
  * Setup code 
@@ -228,9 +229,8 @@ void setup()
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
-  Serial.begin(9600);
 #if ( DEBUG == 1 )
-  Serial.begin(9600);
+  //Serial.begin(9600);
   Serial.print(F("Arduino Pro Mini Motherboard FW "));
   Serial.print(SKETCH_VERSION);
   Serial.flush();
@@ -254,15 +254,16 @@ void setup()
   
   // Changing the integration time gives you a longer time over which to sense light
   // longer timelines are slower, but are good in very low light situtations!
-  //tsl.setTiming(TSL2561_INTEGRATIONTIME_13MS);  // shortest integration time (bright light)
+  tsl.setTiming(TSL2561_INTEGRATIONTIME_13MS);  // shortest integration time (bright light)
   //tsl.setTiming(TSL2561_INTEGRATIONTIME_101MS);  // medium integration time (medium light)
-  tsl.setTiming(TSL2561_INTEGRATIONTIME_402MS);  // longest integration time (dim light)
+  //tsl.setTiming(TSL2561_INTEGRATIONTIME_402MS);  // longest integration time (dim light)
 
   digitalWrite(LED_PIN, LOW);
 
 //  sendSensorMeasurements(false);
 //  sendBattLevel(false);
-#if ( DEBUG == 1 )  
+#if ( DEBUG == 1 )
+  displaySensorDetails();
 #ifdef MY_OTA_FIRMWARE_FEATURE  
   Serial.println("OTA FW update enabled");
 #endif
@@ -644,6 +645,7 @@ int sample(float pressure)
     forecast = UNKNOWN;
   }
 
+#if ( DEBUG == 1 )
   // uncomment when debugging
   Serial.print(F("Forecast at minute "));
   Serial.print(minuteCount);
@@ -651,6 +653,27 @@ int sample(float pressure)
   Serial.print(dP_dt);
   Serial.print(F("kPa/h --> "));
   Serial.println(weather[forecast]);
-
+#endif
   return forecast;
 }
+
+#if ( DEBUG == 1 )
+void displaySensorDetails(void)
+{
+  sensor_t sensor;
+#if ( USE_BMP180 == 1 )  
+  bme.getSensor(&sensor);
+#endif
+  Serial.println(F("------------------------------------"));
+  Serial.print(F("Sensor:       ")); Serial.println(sensor.name);
+  Serial.print(F("Driver Ver:   ")); Serial.println(sensor.version);
+  Serial.print(F("Unique ID:    ")); Serial.println(sensor.sensor_id);
+  Serial.print(F("Max Value:    ")); Serial.print(sensor.max_value); Serial.println(F(" hPa"));
+  Serial.print(F("Min Value:    ")); Serial.print(sensor.min_value); Serial.println(F(" hPa"));
+  Serial.print(F("Resolution:   ")); Serial.print(sensor.resolution); Serial.println(F(" hPa"));
+  Serial.println(F("------------------------------------"));
+  Serial.println(F(""));
+  delay(500);
+}
+#endif
+

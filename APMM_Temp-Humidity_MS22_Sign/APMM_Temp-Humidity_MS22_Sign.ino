@@ -42,17 +42,23 @@
  * 
  */
 
+#include <SPI.h>
+#include <Wire.h>
+#include <EEPROM.h>  
+#include <RunningAverage.h>
+
 #define DEBUG             0
 
 // Enable MySensors Lib debug prints
-//#define MY_DEBUG          0
+#define MY_DEBUG          1
+#define MY_DEBUG_VERBOSE_SIGNING //!< Enable signing related debug prints to serial monitor
 
 // Enable and select radio type attached
 #define MY_RADIO_NRF24
 //#define MY_RADIO_RFM69
 
 // Define a static node address, remove if you want auto address assignment
-#define MY_NODE_ID      7
+#define MY_NODE_ID      3
 
 /*
 Node ID   | Node place        |
@@ -72,30 +78,32 @@ Node ID   | Node place        |
 // For Winbond W25X40
 #define MY_OTA_FLASH_JDECID 0xEF30
 
-#define USE_HTU21		0
-#define USE_SI7021		(!USE_HTU21)
+#define MY_SIGNING_ATSHA204             1
+// SETTINGS FOR MY_SIGNING_ATSHA204
+#ifndef MY_SIGNING_ATSHA204_PIN
+#define MY_SIGNING_ATSHA204_PIN 17 //!< A3 - pin where ATSHA204 is attached
+#endif
+// Enable this if you want destination node to sign all messages sent to this node.
+#define MY_SIGNING_REQUEST_SIGNATURES   1
+//#define MY_SIGNING_SIMPLE_PASSWD        "UsagiHouse"
 
 #include <MySensors.h>
-#include <Wire.h>
+
+#define USE_HTU21    1
+#define USE_SI7021    (!USE_HTU21)
+
 #if (USE_HTU21 == 1)
 #include "HTU21D.h"
-#define SKETCH_NAME "APMM Temp+Hum H"
+#define SKETCH_NAME "APMM Temp+Hum HC"
 #endif
 #if (USE_SI7021 == 1)
-#define SKETCH_NAME "APMM Temp+Hum S"
+#define SKETCH_NAME "APMM Temp+Hum SC"
 #include <SI7021.h>
 #endif
-#include <SPI.h>
+
 #ifndef MY_OTA_FIRMWARE_FEATURE
 #include "drivers/SPIFlash/SPIFlash.cpp"
 #endif
-#include <EEPROM.h>  
-#ifdef MY_SIGNING_ATSHA204
-#include <sha204_lib_return_codes.h>
-#include <sha204_library.h>
-#endif
-#include <RunningAverage.h>
-//#include <avr/power.h>
 
 // Uncomment the line below, to transmit battery voltage as a normal sensor value
 //#define BATT_SENSOR    199
@@ -129,16 +137,10 @@ Node ID   | Node place        |
 // Pin definitions
 #define TEST_PIN       A0
 #define LED_PIN        A2
-#define ATSHA204_PIN   17 // A3
 
 /************************************/
 /********* GLOBAL VARIABLES *********/
 /************************************/
-#ifdef MY_SIGNING_ATSHA204
-const int sha204Pin = ATSHA204_PIN;
-atsha204Class sha204(sha204Pin);
-#endif
-
 #if (USE_HTU21 == 1)
 HTU21D humiditySensor;
 #endif
@@ -190,35 +192,11 @@ void setup()
 #endif
   // First check if we should boot into test mode
 
-  pinMode(TEST_PIN,INPUT);
-  digitalWrite(TEST_PIN, HIGH); // Enable pullup
-  if (!digitalRead(TEST_PIN)) testMode();
-
-#ifdef MY_SIGNING_ATSHA204
-  // Make sure that ATSHA204 is not floating
-  pinMode(ATSHA204_PIN, INPUT);
-  digitalWrite(ATSHA204_PIN, HIGH);
-#endif
-  
-  digitalWrite(TEST_PIN,LOW);
-
   digitalWrite(LED_PIN, HIGH); 
   humiditySensor.begin();
   digitalWrite(LED_PIN, LOW);
 
-#if ( DEBUG == 1 )
-  Serial.flush();
-  Serial.println(F(" - Online!"));
-#endif  
-  
-  //sendTempHumidityMeasurements(false);
-  //sendBattLevel(false);
   raHum.clear();
-#if ( DEBUG == 1 )  
-#ifdef MY_OTA_FIRMWARE_FEATURE  
-  Serial.println("OTA FW update enabled");
-#endif
-#endif
 }
 
 void presentation()

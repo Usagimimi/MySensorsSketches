@@ -52,7 +52,7 @@
 //#define MY_RADIO_RFM69
 
 // Define a static node address, remove if you want auto address assignment
-#define MY_NODE_ID      2
+#define MY_NODE_ID      1
 
 /*
 Node ID   | Node place        |
@@ -88,8 +88,11 @@ Node ID   | Node place        |
 #include "drivers/SPIFlash/SPIFlash.cpp"
 #endif
 #include <EEPROM.h>  
+#ifdef MY_SIGNING_ATSHA204
 #include <sha204_lib_return_codes.h>
 #include <sha204_library.h>
+#endif
+
 //#include <avr/power.h>
 
 // Uncomment the line below, to transmit battery voltage as a normal sensor value
@@ -147,8 +150,10 @@ enum FORECAST
 /************************************/
 /********* GLOBAL VARIABLES *********/
 /************************************/
+#ifdef MY_SIGNING_ATSHA204
 const int sha204Pin = ATSHA204_PIN;
 atsha204Class sha204(sha204Pin);
+#endif
 
 #if ( USE_BMP180 == 0 )
 Adafruit_BME280 bme; // I2C
@@ -206,9 +211,9 @@ void setup()
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
-  Serial.begin(9600);
+  //Serial.begin(9600);
 #if ( DEBUG == 1 )
-  Serial.begin(9600);
+  //Serial.begin(9600);
   Serial.print(F("Arduino Pro Mini Motherboard FW "));
   Serial.print(SKETCH_VERSION);
   Serial.flush();
@@ -394,7 +399,8 @@ void sendBattLevel(bool force)
  * Internal battery ADC measuring 
  *
  *******************************************/
-long readVcc() {
+long readVcc()
+{
   // Read 1.1V reference against AVcc
   // set the reference to Vcc and the measurement to the internal 1.1V reference
   #if defined(__AVR_ATmega32U4__) || defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)

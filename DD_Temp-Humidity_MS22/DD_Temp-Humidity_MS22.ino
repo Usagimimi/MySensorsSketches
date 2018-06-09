@@ -42,7 +42,7 @@
  * 
  */
 
-#define DEBUG             0
+//#define DEBUG            0
 
 // Enable MySensors Lib debug prints
 //#define MY_DEBUG          0
@@ -52,55 +52,47 @@
 //#define MY_RADIO_RFM69
 
 // Define a static node address, remove if you want auto address assignment
-#define MY_NODE_ID      7
+#define MY_NODE_ID      5
 
 /*
 Node ID   | Node place        |
 ----------+-------------------+-----
-1         | Bedroom           | +
+1         | Bedroom           |
 2         | Childroom         | +
 3         | Dinner            | +
-4         | Outside North     |
+4         | Outside North     | +
 5         | Outside South     |
-6         | Balcony           |
-7         | Guestroom         |
+6         | Balcony           | +
 */
 
 
-#define MY_OTA_FIRMWARE_FEATURE 1
+//#define MY_OTA_FIRMWARE_FEATURE 1
 
 // For Winbond W25X40
-#define MY_OTA_FLASH_JDECID 0xEF30
+//#define MY_OTA_FLASH_JDECID 0xEF30
 
-#define USE_HTU21		0
-#define USE_SI7021		(!USE_HTU21)
-
+#define MY_RF24_CE_PIN    8
+#define MY_RF24_CS_PIN    7
 #include <MySensors.h>
 #include <Wire.h>
-#if (USE_HTU21 == 1)
 #include "HTU21D.h"
-#define SKETCH_NAME "APMM Temp+Hum H"
-#endif
-#if (USE_SI7021 == 1)
-#define SKETCH_NAME "APMM Temp+Hum S"
-#include <SI7021.h>
-#endif
 #include <SPI.h>
-#ifndef MY_OTA_FIRMWARE_FEATURE
+#ifdef MY_OTA_FIRMWARE_FEATURE
 #include "drivers/SPIFlash/SPIFlash.cpp"
 #endif
-#include <EEPROM.h>  
+#include <EEPROM.h>
 #ifdef MY_SIGNING_ATSHA204
 #include <sha204_lib_return_codes.h>
 #include <sha204_library.h>
 #endif
-#include <RunningAverage.h>
 //#include <avr/power.h>
 
 // Uncomment the line below, to transmit battery voltage as a normal sensor value
 //#define BATT_SENSOR    199
 
-#define SKETCH_VERSION "1.4"
+#define SKETCH_NAME "DD Temp+Humidity"
+#define SKETCH_VERSION "1.2"
+
 
 #define AVERAGES 2
 
@@ -128,7 +120,7 @@ Node ID   | Node place        |
 
 // Pin definitions
 #define TEST_PIN       A0
-#define LED_PIN        A2
+#define LED_PIN        9
 #define ATSHA204_PIN   17 // A3
 
 /************************************/
@@ -139,13 +131,7 @@ const int sha204Pin = ATSHA204_PIN;
 atsha204Class sha204(sha204Pin);
 #endif
 
-#if (USE_HTU21 == 1)
 HTU21D humiditySensor;
-#endif
-#if (USE_SI7021 == 1)
-SI7021 humiditySensor;
-#endif
-
 #ifdef MY_OTA_FIRMWARE_FEATURE
 SPIFlash flash(8, MY_OTA_FLASH_JDECID); // (Cs, ID)
 #endif
@@ -161,16 +147,15 @@ MyMessage msgBatt(BATT_SENSOR, V_VOLTAGE);
 // Global settings
 int measureCount = 0;
 int sendBattery = 0;
+
 boolean highfreq = true;
 boolean ota_enabled = false; 
 boolean transmission_occured = false;
 
 // Storage of old measurements
 float lastTemperature = -100;
-int lastHumidity = -100;
+float lastHumidity = -100;
 long lastBattery = -100;
-
-RunningAverage raHum(AVERAGES);
 
 /****************************************************
  *
@@ -182,17 +167,12 @@ void setup()
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
-#if ( DEBUG == 1 )
   Serial.begin(9600); // Actually 1200
+#if ( DEBUG == 1 )
   Serial.print(F("Arduino Pro Mini Motherboard FW "));
   Serial.print(SKETCH_VERSION);
   Serial.flush();
 #endif
-  // First check if we should boot into test mode
-
-  pinMode(TEST_PIN,INPUT);
-  digitalWrite(TEST_PIN, HIGH); // Enable pullup
-  if (!digitalRead(TEST_PIN)) testMode();
 
 #ifdef MY_SIGNING_ATSHA204
   // Make sure that ATSHA204 is not floating
@@ -200,20 +180,12 @@ void setup()
   digitalWrite(ATSHA204_PIN, HIGH);
 #endif
   
-  digitalWrite(TEST_PIN,LOW);
-
   digitalWrite(LED_PIN, HIGH); 
   humiditySensor.begin();
   digitalWrite(LED_PIN, LOW);
 
-#if ( DEBUG == 1 )
-  Serial.flush();
-  Serial.println(F(" - Online!"));
-#endif  
-  
-  //sendTempHumidityMeasurements(false);
-  //sendBattLevel(false);
-  raHum.clear();
+  sendSensorMeasurements(false);
+  sendBattLevel(false);
 #if ( DEBUG == 1 )  
 #ifdef MY_OTA_FIRMWARE_FEATURE  
   Serial.println("OTA FW update enabled");
@@ -259,8 +231,8 @@ void loop() {
     forceTransmit = true; 
     measureCount = 0;
   }
-    
-  sendTempHumidityMeasurements(forceTransmit);
+
+  sendSensorMeasurements(forceTransmit);
 #ifdef MY_OTA_FIRMWARE_FEATURE
   if (transmission_occured) {
       wait(OTA_WAIT_PERIOD);
@@ -272,31 +244,29 @@ void loop() {
 
 /*********************************************
  *
- * Sends temperature and humidity from HTU21 sensor
+ * Sends sensors data
  *
  * Parameters
  * - force : Forces transmission of a value (even if it's the same as previous measurement)
  *
  *********************************************/
-void sendTempHumidityMeasurements(bool force)
+void sendSensorMeasurements(bool force)
 {
   bool tx = force;
-
-#if (USE_HTU21 == 1)
+  
   float hum = humiditySensor.readHumidity();
   float temp = humiditySensor.readTemperature();
-#endif
-#if (USE_SI7021 == 1)
-  float hum = humiditySensor.getHumidityPercent();
-  float temp = humiditySensor.getCelsiusHundredths() / 100.0;
-#endif
-  
-  raHum.addValue(hum);
   
   float diffTemp = abs(lastTemperature - temp);
-  float diffHum = abs(lastHumidity - raHum.getAverage());
+  float diffHum = abs(lastHumidity - hum);
 #if ( DEBUG == 1 )
   clock_prescale_set(clock_div_1);
+  Serial.print(F("Temperature = "));
+  Serial.print(temp);
+  Serial.println(F(" *C"));
+  Serial.print(F("Humidity = "));
+  Serial.print(temp);
+  Serial.println(F(" \%"));
   Serial.print(F("TempDiff :"));Serial.println(diffTemp);
   Serial.print(F("HumDiff  :"));Serial.println(diffHum); 
 #endif
@@ -307,11 +277,10 @@ void sendTempHumidityMeasurements(bool force)
   if (tx) {
     measureCount = 0;
 #if ( DEBUG == 1 )    
-    Serial.print("T: ");Serial.println(temp);
-    Serial.print("H: ");Serial.println(hum);
+    Serial.print(F("Send..."));
 #endif    
-    send(msgTemp.set(temp,2));
-    send(msgHum.set(hum, 2));
+    send(msgTemp.set(temp,1));
+    send(msgHum.set(hum, 1));
     lastTemperature = temp;
     lastHumidity = hum;
     transmission_occured = true;
@@ -384,108 +353,5 @@ long readVcc()
   result = 1125300L / result; // Calculate Vcc (in mV); 1125300 = 1.1*1023*1000
   return result; // Vcc in millivolts
  
-}
-
-/****************************************************
- *
- * Verify all peripherals, and signal via the LED if any problems.
- *
- ****************************************************/
-void testMode()
-{
-#if ( DEBUG == 1 )  
-  uint8_t rx_buffer[SHA204_RSP_SIZE_MAX];
-  uint8_t ret_code;
-  byte tests = 0;
-  
-  digitalWrite(LED_PIN, HIGH); // Turn on LED.
-  Serial.println(F(" - TestMode"));
-  Serial.println(F("Testing peripherals!"));
-  Serial.flush();
-  Serial.print(F("-> HTU21 : ")); 
-  Serial.flush();
-  
-  if (humiditySensor.begin()) 
-  {
-    Serial.println(F("ok!"));
-    tests ++;
-  }
-  else
-  {
-    Serial.println(F("failed!"));
-  }
-  Serial.flush();
-
-#ifdef ( MY_OTA_FIRMWARE_FEATURE )
-  Serial.print(F("-> Flash : "));
-  Serial.flush();
-  if (flash.initialize())
-  {
-    Serial.println(F("ok!"));
-    tests ++;
-  }
-  else
-  {
-    Serial.println(F("failed!"));
-  }
-  Serial.flush();
-#endif
-  
-#ifdef ( MY_SIGNING_ATSHA204 )
-  Serial.print(F("-> SHA204 : "));
-  ret_code = sha204.sha204c_wakeup(rx_buffer);
-  Serial.flush();
-  if (ret_code != SHA204_SUCCESS)
-  {
-    Serial.print(F("Failed to wake device. Response: ")); Serial.println(ret_code, HEX);
-  }
-  Serial.flush();
-  if (ret_code == SHA204_SUCCESS)
-  {
-    ret_code = sha204.getSerialNumber(rx_buffer);
-    if (ret_code != SHA204_SUCCESS)
-    {
-      Serial.print(F("Failed to obtain device serial number. Response: ")); Serial.println(ret_code, HEX);
-    }
-    else
-    {
-      Serial.print(F("Ok (serial : "));
-      for (int i=0; i<9; i++)
-      {
-        if (rx_buffer[i] < 0x10)
-        {
-          Serial.print('0'); // Because Serial.print does not 0-pad HEX
-        }
-        Serial.print(rx_buffer[i], HEX);
-      }
-      Serial.println(")");
-      tests ++;
-    }
-
-  }
-  Serial.flush();
-#endif
-
-  Serial.println(F("Test finished"));
-  
-  if (tests == 3) 
-  {
-    Serial.println(F("Selftest ok!"));
-    while (1) // Blink OK pattern!
-    {
-      digitalWrite(LED_PIN, HIGH);
-      delay(200);
-      digitalWrite(LED_PIN, LOW);
-      delay(200);
-    }
-  }
-  else 
-  {
-    Serial.println(F("----> Selftest failed!"));
-    while (1) // Blink FAILED pattern! Rappidly blinking..
-    {
-    }
-  }  
-#endif  
 }
 
